@@ -29,14 +29,14 @@ FILE_COLUMNS = {
     "file_mkzan21e": {"name": "Cover_Photo", "type": "Cover"},
 }
 
-# Series mapping
+# Series mapping (matches Monday.com group titles)
 SERIES_MAP = {
-    "high_school_core": "High School Core",
-    "middle_school_core": "Middle School Core",
+    "high_school_core": "Core High School",
+    "middle_school_core": "Core Middle School",
     "elementary_core": "Elementary Core",
-    "early_learning_core": "Early Learning Core",
-    "transition": "Transition Practices",
-    "school_safety": "School Safety Series",
+    "early_learning_core": "Core Early Learning",
+    "transition": "Transition",
+    "school_safety": "School Safety",
     "counselor_series": "Counselor Series",
     "sound_practices": "Sound Practices",
 }
@@ -73,13 +73,13 @@ class MondayAPIClient:
         return result.get("data", {})
 
     def fetch_board_items(
-        self, board_id: str, limit: int = 100, page: int = 1
-    ) -> List[Dict]:
-        """Fetch items from a Monday.com board with pagination."""
+        self, board_id: str, limit: int = 100, cursor: Optional[str] = None
+    ) -> Tuple[List[Dict], Optional[str]]:
+        """Fetch items from a Monday.com board with cursor-based pagination."""
         query = """
-        query ($boardId: [ID!], $limit: Int!, $page: Int!) {
+        query ($boardId: [ID!], $limit: Int!, $cursor: String) {
           boards(ids: $boardId) {
-            items_page(limit: $limit, page: $page) {
+            items_page(limit: $limit, cursor: $cursor) {
               cursor
               items {
                 id
@@ -100,10 +100,37 @@ class MondayAPIClient:
         }
         """
 
-        variables = {"boardId": board_id, "limit": limit, "page": page}
+        variables = {"boardId": board_id, "limit": limit}
+        if cursor:
+            variables["cursor"] = cursor
 
         data = self.query(query, variables)
-        return data.get("boards", [{}])[0].get("items_page", {}).get("items", [])
+        items_page = data.get("boards", [{}])[0].get("items_page", {})
+        return items_page.get("items", []), items_page.get("cursor")
+
+    def fetch_asset_url(self, asset_id: int) -> Optional[str]:
+        """Fetch the download URL for an asset by its ID."""
+        query = """
+        query ($assetIds: [ID!]!) {
+          assets(ids: $assetIds) {
+            id
+            name
+            public_url
+          }
+        }
+        """
+
+        variables = {"assetIds": [asset_id]}
+
+        try:
+            data = self.query(query, variables)
+            assets = data.get("assets", [])
+            if assets:
+                return assets[0].get("public_url")
+        except Exception:
+            pass
+
+        return None
 
 
 class PracticeDownloader:
@@ -139,7 +166,7 @@ class PracticeDownloader:
     def _extract_file_info(self, column_value: str) -> Optional[Dict]:
         """Extract file information from Monday.com column value."""
         try:
-            if not column_value or column_value == "null":
+            if not column_value or column_value == "null" or column_value == "None":
                 return None
 
             data = json.loads(column_value)
@@ -152,11 +179,15 @@ class PracticeDownloader:
 
             # Get the first file
             file_info = files[0]
+            asset_id = file_info.get("assetId")
+            if not asset_id:
+                return None
+
             return {
-                "url": file_info.get("url"),
+                "assetId": asset_id,
                 "name": file_info.get("name"),
             }
-        except (json.JSONDecodeError, KeyError, IndexError):
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
             return None
 
     def _get_file_extension(self, filename: str, url: str) -> str:
@@ -194,11 +225,12 @@ class PracticeDownloader:
         print("Fetching practices from Monday.com...")
 
         all_items = []
-        page = 1
+        cursor = None
         limit = 100
+        page = 1
 
         while True:
-            items = self.client.fetch_board_items(BOARD_ID, limit=limit, page=page)
+            items, cursor = self.client.fetch_board_items(BOARD_ID, limit=limit, cursor=cursor)
 
             if not items:
                 break
@@ -216,7 +248,8 @@ class PracticeDownloader:
                 f"Page {page}: Fetched {len(filtered_items)} practices (Total: {len(all_items)})"
             )
 
-            if len(items) < limit:
+            # If no cursor returned, we've reached the end
+            if not cursor:
                 break
 
             page += 1
@@ -243,15 +276,23 @@ class PracticeDownloader:
 
             file_info = self._extract_file_info(column_values[col_id])
 
-            if not file_info or not file_info.get("url"):
+            if not file_info or not file_info.get("assetId"):
                 continue
 
             files_found = True
             self.stats["total_files"] += 1
 
+            # Fetch the download URL from Monday.com using the asset ID
+            file_url = self.client.fetch_asset_url(file_info["assetId"])
+
+            if not file_url:
+                print(f"  ✗ {col_info['type']}: Could not fetch download URL")
+                self.stats["failed"] += 1
+                continue
+
             # Determine file extension
             extension = self._get_file_extension(
-                file_info.get("name", ""), file_info["url"]
+                file_info.get("name", ""), file_url
             )
 
             # Build filename
@@ -266,7 +307,7 @@ class PracticeDownloader:
 
             # Download file
             print(f"  ↓ {col_info['type']}: Downloading...", end=" ")
-            if self._download_file(file_info["url"], filepath):
+            if self._download_file(file_url, filepath):
                 print("✓")
                 self.stats["downloaded"] += 1
             else:
