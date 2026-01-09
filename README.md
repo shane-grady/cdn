@@ -80,6 +80,30 @@ For each practice, the script downloads available files from these columns:
 - **Long Spanish** - 10-minute Spanish audio
 - **Cover Photo** - Cover image (if available)
 
+## Download Report (CSV)
+
+After each download batch, the script automatically generates a CSV report documenting all download attempts. The report includes:
+
+- Practice number and name
+- File type (5min EN, 10min EN, etc.)
+- Original filename from Monday.com
+- Standardized downloaded filename
+- Status (Downloaded / Skipped - Already exists / Failed)
+- File size in MB
+- Timestamp
+
+**Report filename format:**
+```
+download_report_{Series_Name}_{Timestamp}.csv
+```
+
+**Example:**
+```
+download_report_Core_High_School_20260109_020356.csv
+```
+
+This CSV report can be imported into Excel or Google Sheets for tracking and documentation purposes.
+
 ## File Naming Convention
 
 Files use a standardized naming format:
@@ -139,6 +163,8 @@ Skipped (exist):       0
 Failed:                0
 
 Files saved to: /Users/yourname/practice_files/High_School_Core
+
+✓ Download report saved: download_report_Core_High_School_20260109_020356.csv
 ```
 
 ## Tips

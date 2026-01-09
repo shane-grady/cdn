@@ -10,8 +10,10 @@ import os
 import sys
 import re
 import json
+import csv
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from datetime import datetime
 import requests
 
 
@@ -152,6 +154,7 @@ class PracticeDownloader:
             "skipped": 0,
             "failed": 0,
         }
+        self.download_records = []  # Track all download attempts for CSV report
 
     def _sanitize_filename(self, name: str) -> str:
         """Convert a string to a safe filename."""
@@ -288,6 +291,17 @@ class PracticeDownloader:
             if not file_url:
                 print(f"  ✗ {col_info['type']}: Could not fetch download URL")
                 self.stats["failed"] += 1
+                # Record failed URL fetch
+                self.download_records.append({
+                    "practice_number": practice_number,
+                    "practice_name": practice_name,
+                    "file_type": col_info['type'],
+                    "original_filename": file_info.get("name", "N/A"),
+                    "downloaded_filename": "N/A",
+                    "status": "Failed - Could not fetch URL",
+                    "file_size_mb": "N/A",
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
                 continue
 
             # Determine file extension
@@ -303,6 +317,18 @@ class PracticeDownloader:
             if filepath.exists():
                 print(f"  ○ {col_info['type']}: Already exists, skipping")
                 self.stats["skipped"] += 1
+                file_size_mb = round(filepath.stat().st_size / (1024 * 1024), 2)
+                # Record skipped file
+                self.download_records.append({
+                    "practice_number": practice_number,
+                    "practice_name": practice_name,
+                    "file_type": col_info['type'],
+                    "original_filename": file_info.get("name", "N/A"),
+                    "downloaded_filename": filename,
+                    "status": "Skipped - Already exists",
+                    "file_size_mb": file_size_mb,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
                 continue
 
             # Download file
@@ -310,8 +336,31 @@ class PracticeDownloader:
             if self._download_file(file_url, filepath):
                 print("✓")
                 self.stats["downloaded"] += 1
+                file_size_mb = round(filepath.stat().st_size / (1024 * 1024), 2)
+                # Record successful download
+                self.download_records.append({
+                    "practice_number": practice_number,
+                    "practice_name": practice_name,
+                    "file_type": col_info['type'],
+                    "original_filename": file_info.get("name", "N/A"),
+                    "downloaded_filename": filename,
+                    "status": "Downloaded",
+                    "file_size_mb": file_size_mb,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
             else:
                 self.stats["failed"] += 1
+                # Record failed download
+                self.download_records.append({
+                    "practice_number": practice_number,
+                    "practice_name": practice_name,
+                    "file_type": col_info['type'],
+                    "original_filename": file_info.get("name", "N/A"),
+                    "downloaded_filename": filename,
+                    "status": "Failed - Download error",
+                    "file_size_mb": "N/A",
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
 
         if not files_found:
             print("  (no files available)")
@@ -337,6 +386,52 @@ class PracticeDownloader:
 
         # Print summary
         self.print_summary()
+
+        # Generate CSV report
+        self.generate_csv_report()
+
+    def generate_csv_report(self) -> None:
+        """Generate a CSV report of all download attempts."""
+        if not self.download_records:
+            return
+
+        # Create CSV filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_filename = f"download_report_{self._sanitize_filename(self.series_name)}_{timestamp}.csv"
+        csv_filepath = self.output_dir / csv_filename
+
+        try:
+            with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    "Practice Number",
+                    "Practice Name",
+                    "File Type",
+                    "Original Filename (Monday.com)",
+                    "Downloaded Filename",
+                    "Status",
+                    "File Size (MB)",
+                    "Timestamp"
+                ]
+
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+
+                for record in self.download_records:
+                    writer.writerow({
+                        "Practice Number": record["practice_number"],
+                        "Practice Name": record["practice_name"],
+                        "File Type": record["file_type"],
+                        "Original Filename (Monday.com)": record["original_filename"],
+                        "Downloaded Filename": record["downloaded_filename"],
+                        "Status": record["status"],
+                        "File Size (MB)": record["file_size_mb"],
+                        "Timestamp": record["timestamp"]
+                    })
+
+            print(f"\n✓ Download report saved: {csv_filepath.name}")
+
+        except Exception as e:
+            print(f"\n✗ Error generating CSV report: {e}")
 
     def print_summary(self) -> None:
         """Print download summary."""
